@@ -1,0 +1,11 @@
+{
+  "codeowners": ["@wez"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/wez/hass-govee-lan",
+  "domain": "govee_lan",
+  "iot_class": "local_polling",
+  "name": "Govee LAN Control",
+  "requirements": [],
+  "version": "1.0.0"
+}
