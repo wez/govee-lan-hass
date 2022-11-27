@@ -1,5 +1,7 @@
+from bleak import BleakClient, BleakError
 import asyncio
 from homeassistant.util import color
+from homeassistant.components import bluetooth
 from homeassistant.const import Platform
 import logging
 import socket
@@ -7,6 +9,7 @@ from homeassistant.util.timeout import TimeoutManager
 import json
 from typing import Any
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import callback
 from homeassistant import core
 from homeassistant.components import network
 from homeassistant.helpers.entity import DeviceInfo, Entity
@@ -32,6 +35,7 @@ BROADCAST_ADDR = "239.255.255.250"
 
 _LOGGER = logging.getLogger(__name__)
 _DEVICES = {}
+_BLE_DEVICES = {}
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({})
 
 SKU_NAMES = {
@@ -72,11 +76,43 @@ async def async_setup_platform(
     return True
 
 
+async def try_ble(
+    hass: core.HomeAssistant, service_info: bluetooth.BluetoothServiceInfoBleak
+):
+    async with BleakClient(service_info.device) as client:
+        _LOGGER.error(
+            "try_ble: %s has characteristics: %s",
+            service_info,
+            client.services.characteristics,
+        )
+
+
 async def async_setup_entry(
     hass: core.HomeAssistant, entry: ConfigEntry, add_entities: AddEntitiesCallback
 ):
     _LOGGER.error("async_setup_entry was called")
     await discover_devices(hass, add_entities)
+
+    if False:
+
+        @callback
+        def _async_discovered_ble(
+            service_info: bluetooth.BluetoothServiceInfoBleak,
+            change: bluetooth.BluetoothChange,
+        ) -> None:
+            """Subscribe to bluetooth changes."""
+            _LOGGER.warning("New service_info: %s %s", change, service_info)
+            _BLE_DEVICES[service_info.device.address] = service_info
+            hass.async_create_task(try_ble(hass, service_info))
+
+        entry.async_on_unload(
+            bluetooth.async_register_callback(
+                hass,
+                _async_discovered_ble,
+                {"manufacturer_id": 34818},
+                bluetooth.BluetoothScanningMode.ACTIVE,
+            )
+        )
 
 
 async def discover_devices(hass: core.HomeAssistant, add_entities: AddEntitiesCallback):
@@ -447,6 +483,7 @@ class GoveeDiscoProtocol:
             return
 
         _LOGGER.warning("unknown msg: %r from %s", msg, addr)
+
 
 async def discover_devices_on_interface(
     interface: str, hass: core.HomeAssistant, add_entities: AddEntitiesCallback
