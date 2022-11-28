@@ -1,0 +1,31 @@
+{
+  "title": "Govee LAN Control",
+  "config": {
+    "abort": {
+    },
+    "error": {
+    },
+    "step": {
+      "user": {
+        "data": {
+          "api_key": "API Key"
+        },
+        "title": "API Key (optional)",
+        "description": "Get your API Key from the Govee Home App."
+      }
+    }
+  },
+  "options": {
+    "error": {
+    },
+    "step": {
+      "user": {
+        "data": {
+          "api_key": "API Key"
+        },
+        "title": "Options",
+        "description": "Configure the Govee integration."
+      }
+    }
+  }
+}
