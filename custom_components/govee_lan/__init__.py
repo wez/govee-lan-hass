@@ -6,8 +6,12 @@ import logging
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from .const import DOMAIN
+from typing import Dict
+
+from govee_led_wez import GoveeController, GoveeDevice
 
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = vol.Schema({vol.Optional(DOMAIN): {}}, extra=vol.ALLOW_EXTRA)

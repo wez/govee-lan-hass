@@ -1,23 +1,16 @@
-from bleak import BleakClient, BleakError
+import copy
 import asyncio
-import time
-import aiohttp
-import ssl
-import certifi
-from homeassistant.const import CONF_API_KEY
-from homeassistant.util import color
-from homeassistant.const import Platform
+import random
+import math
+import json
 import logging
 import socket
-from homeassistant.util.timeout import TimeoutManager
-import json
-from typing import Any
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import callback
+import time
+
+from typing import Any, Dict
+
 from homeassistant import core
 from homeassistant.components import network
-from homeassistant.helpers.entity import DeviceInfo, Entity
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.components.light import (
     ColorMode,
     ATTR_BRIGHTNESS,
@@ -32,15 +25,41 @@ from homeassistant.components.light import (
     LightEntity,
     PLATFORM_SCHEMA,
 )
+import homeassistant.helpers.config_validation as cv
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_API_KEY, Platform
+from homeassistant.core import callback
+from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.util import color
+from homeassistant.util.timeout import TimeoutManager
+from .const import DOMAIN
+import voluptuous as vol
 
-BROADCAST_PORT = 4001
-COMMAND_PORT = 4003
-LISTEN_PORT = 4002
-BROADCAST_ADDR = "239.255.255.250"
+from govee_led_wez import (
+    GoveeController,
+    GoveeDevice,
+    GoveeDeviceState,
+    GoveeColor,
+    GoveeHttpDeviceDefinition,
+    GoveeLanDeviceDefinition,
+)
+
+# Serialize async_update calls, even though they are async capable.
+# For LAN control, we want to avoid a burst of UDP traffic causing
+# lost responses.
+# This is read by HA.
+PARALLEL_UPDATES = 1
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({})
+
+# This is read by HA
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({vol.Optional(CONF_API_KEY): cv.string})
+
+# TODO: move to option flow
+HTTP_POLL_INTERVAL = 600
+LAN_POLL_INTERVAL = 60
 
 SKU_NAMES = {
     "H610A": "Glide Lively",
@@ -51,8 +70,35 @@ SKU_NAMES = {
 
 
 class DeviceRegistry:
-    def __init__(self):
-        self.devices = {}
+    def __init__(self, add_entities: AddEntitiesCallback):
+        self.devices: Dict[str, GoveLightEntity] = {}
+        self.add_entities = add_entities
+
+    def handle_device_update(
+        self,
+        hass: core.HomeAssistant,
+        entry: ConfigEntry,
+        controller: GoveeController,
+        device: GoveeDevice,
+    ):
+        entity = self.devices.get(device.device_id, None)
+        if entity:
+            # Update entity name in case we found the entity
+            # via the LAN API before we found it via HTTP
+            if (
+                device.http_definition
+                and entity._attr_name == entity._govee_fallback_name
+            ):
+                entity._attr_name = device.http_definition.device_name
+
+            entity._govee_device = device
+            entity._govee_device_updated()
+        else:
+            entity = GoveLightEntity(controller, device)
+            self.devices[device.device_id] = entity
+            entity._govee_device_updated()
+            _LOGGER.info("Adding %s %s", device.device_id, entity._attr_name)
+            self.add_entities([entity])
 
 
 async def async_get_interfaces(hass: core.HomeAssistant):
@@ -73,87 +119,56 @@ async def async_get_interfaces(hass: core.HomeAssistant):
     return interfaces
 
 
-async def discover_api_devices(
-    hass: core.HomeAssistant,
-    entry: ConfigEntry,
-    add_entities: AddEntitiesCallback,
-    registry: DeviceRegistry,
-):
-    api_key = entry.options.get(CONF_API_KEY, entry.data.get(CONF_API_KEY, None))
-    if not api_key:
-        return
-
-    client = GoveeApiClient(api_key)
-    devices = await client.get_devices()
-    if not devices:
-        return
-
-    for dev in devices:
-        device = GoveeDevice(hass, dev["device"], dev["model"], None)
-        device._attr_name = dev["deviceName"]
-        device._client = client
-
-        existing = registry.devices.get(device.device_id, None)
-        if not existing:
-            _LOGGER.debug("HTTP API Found device %r", device)
-            registry.devices[device.device_id] = device
-            add_entities([device], update_before_add=False)
-
-
 async def async_setup_entry(
     hass: core.HomeAssistant, entry: ConfigEntry, add_entities: AddEntitiesCallback
 ):
     _LOGGER.info("async_setup_entry was called")
-    registry = DeviceRegistry()
+
+    registry = DeviceRegistry(add_entities)
+    controller = GoveeController()
+    controller.set_device_control_timeout(3)  # TODO: configurable
+    controller.set_device_change_callback(
+        lambda device: registry.handle_device_update(hass, entry, controller, device)
+    )
+    hass.data[DOMAIN]["controller"] = controller
+    hass.data[DOMAIN]["registry"] = registry
+
+    api_key = entry.options.get(CONF_API_KEY, entry.data.get(CONF_API_KEY, None))
+
+    entry.async_on_unload(controller.stop)
 
     async def update_config(hass: core.HomeAssistant, entry: ConfigEntry):
         _LOGGER.info("config options were changed")
-        await discover_api_devices(hass, entry, add_entities, registry)
+        # TODO: how to propagate?
 
     entry.async_on_unload(entry.add_update_listener(update_config))
 
-    await discover_api_devices(hass, entry, add_entities, registry)
-    await discover_devices(hass, add_entities, entry, registry)
-
-
-async def discover_devices(
-    hass: core.HomeAssistant,
-    add_entities: AddEntitiesCallback,
-    entry: ConfigEntry,
-    registry: DeviceRegistry,
-):
-    interfaces = await async_get_interfaces(hass)
-    _LOGGER.info("setup found interfaces: %r", interfaces)
-    for interface in interfaces:
-        hass.async_create_task(
-            discover_devices_on_interface(
-                interface, hass, add_entities, entry, registry
+    if api_key:
+        controller.set_http_api_key(api_key)
+        try:
+            await controller.query_http_devices()
+        except RuntimeError as exc:
+            # The consequence of this is that the user-friendly names
+            # won't be populated immediately for devices that we
+            # do manage to discover via the LAN API.
+            _LOGGER.error(
+                "failed to get device list from Govee HTTP API. Will retry in the background",
+                exc_info=exc,
             )
-        )
+
+        async def http_poller(interval):
+            await asyncio.sleep(interval)
+            controller.start_http_poller(interval)
+
+        hass.loop.create_task(http_poller(HTTP_POLL_INTERVAL))
+
+    interfaces = await async_get_interfaces(hass)
+    controller.start_lan_poller(interfaces)
 
 
-class GoveeDevStatus:
-    def __init__(
-        self, turned_on: bool, brightness_pct: int, color, color_temp_kelvin: int
-    ):
-        self.turned_on = turned_on
-        self.brightness_pct = brightness_pct
-        self.color = color
-        self.color_temp_kelvin = color_temp_kelvin
-
-    def __repr__(self):
-        return str(self.__dict__)
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-    def __eq__(self, other):
-        if other is None:
-            return False
-        return self.__dict__ == other.__dict__
-
-
-class GoveeDevice(LightEntity):
+class GoveLightEntity(LightEntity):
+    _govee_controller: GoveeController
+    _govee_device: GoveeDevice
     _attr_min_color_temp_kelvin = 2000
     _attr_max_color_temp_kelvin = 9000
     _attr_supported_color_modes = {
@@ -162,447 +177,205 @@ class GoveeDevice(LightEntity):
         ColorMode.RGB,
     }
 
-    def __init__(self, hass: core.HomeAssistant, device_id, sku, addr):
-        self.hass = hass
-        self.device_id = device_id
-        self.sku = sku
-        self.addr = addr
-        self.status = None
-        self._govee_current_request = None
-        self._last_http_poll = None
+    def __init__(self, controller: GoveeController, device: GoveeDevice):
+        self._govee_controller = controller
+        self._govee_device = device
+        self._last_poll = None
 
-        ident = self.device_id.replace(":", "")
-        self._attr_unique_id = f"{sku}_{ident}"
-        if sku in SKU_NAMES:
-            self._attr_name = f"{SKU_NAMES[sku]} {sku.upper()}_{ident[-4:].upper()}"
+        ident = device.device_id.replace(":", "")
+        self._attr_unique_id = f"{device.model}_{ident}"
+
+        fallback_name = None
+        if device.model in SKU_NAMES:
+            fallback_name = (
+                f"{SKU_NAMES[device.model]} {device.model.upper()}_{ident[-4:].upper()}"
+            )
         else:
-            self._attr_name = f"{sku.upper()}_{ident[-4:].upper()}"
+            fallback_name = f"{device.model.upper()}_{ident[-4:].upper()}"
+
+        self._govee_fallback_name = fallback_name
+
+        if device.http_definition is not None:
+            self._attr_name = device.http_definition.device_name
+            # TODO: apply properties colorTem range?
+        else:
+            self._attr_name = fallback_name
 
     def __repr__(self):
         return str(self.__dict__)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._govee_device.device_id)},
+            name=self.name,
+            manufacturer="Govee",
+            model=self._govee_device.model,
+            sw_version=self._govee_device.lan_definition.wifi_software_version
+            if self._govee_device.lan_definition
+            else None,
+        )
 
     @property
     def entity_registry_enabled_default(self):
         """Return if the entity should be enabled when first added to the entity registry."""
         return True
 
-    async def _async_send_govee_request_http(self, cmd, value, assumed_status):
-        if cmd == "devStatus":
-            now = time.monotonic()
-            if self._last_http_poll is not None:
-                if now - self._last_http_poll < 600:
-                    # Skip this poll
-                    _LOGGER.debug(
-                        "skipping poll because only %s have elapsed",
-                        now - self._last_http_poll,
-                    )
-                    return
-
-            self._last_http_poll = now
-            props = await self._client.get_state(self.device_id, self.sku)
-            _LOGGER.debug("props is %r", props)
-            if not props:
-                return
-
-            turned_on = False
-            brightness_pct = 100
-            color = None
-            color_temp_kelvin = 0
-
-            for prop in props:
-                if "powerState" in prop:
-                    turned_on = prop["powerState"] == "on"
-                if "brightness" in prop:
-                    brightness_pct = prop["brightness"]
-                if "color" in prop:
-                    color = prop["color"]
-                if "colorTem" in prop:
-                    color_temp_kelvin = prop["colorTem"]
-
-            status = GoveeDevStatus(turned_on, brightness_pct, color, color_temp_kelvin)
-            self.set_status(status)
-            return
-
-        put = None
-
-        if cmd == "turn":
-            put = {"name": "turn", "value": "on" if value["value"] else "off"}
-        elif cmd == "brightness":
-            put = {"name": "brightness", "value": value["value"]}
-        elif cmd == "colorwc" and "color" in value:
-            put = {"name": "color", "value": value["color"]}
-        elif cmd == "colorwc":
-            put = {"name": "colorTem", "value": value["colorTemInKelvin"]}
-        else:
-            _LOGGER.error("not sure how to translate %s %s to http api", cmd, value)
-            return
-
-        resp = await self._client.control(
-            {"device": self.device_id, "model": self.sku, "cmd": put}
+    def _govee_device_updated(self):
+        device = self._govee_device
+        state = device.state
+        _LOGGER.debug(
+            "device state updated: %s entity_id=%s --> %r %r",
+            device.device_id,
+            self.entity_id,
+            state,
+            device,
         )
 
-        if assumed_status:
-            self.set_status(assumed_status)
-
-    async def async_send_govee_request(self, cmd, value, assumed_status=None):
-        if not self.addr:
-            return await self._async_send_govee_request_http(cmd, value, assumed_status)
-
-        data = bytes(json.dumps({"msg": {"cmd": cmd, "data": value}}), "utf-8")
-        dev_status = bytes(
-            json.dumps({"msg": {"cmd": "devStatus", "data": {}}}), "utf-8"
-        )
-
-        _LOGGER.debug("will send %s to %s", data, self.addr)
-
-        if self._govee_current_request:
-            _LOGGER.error(
-                "ignoring %s -> %s because we have a pending request", data, self.addr
-            )
-            return
-
-        self._govee_current_request = asyncio.get_running_loop().create_future()
-        try:
-            self._govee_send_item(data)
-
-            for attempt in range(0, 3):
-                if data != dev_status or attempt > 0:
-                    self._govee_send_item(dev_status)
-
-                timeout = TimeoutManager()
-                try:
-                    async with timeout.async_timeout(3):
-                        await self._govee_current_request
-                        _LOGGER.debug("OK %s -> %s", data, self.addr)
-                        return
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    _LOGGER.error("TIMEOUT %s -> %s", data, self.addr)
-                    self._govee_current_request = (
-                        asyncio.get_running_loop().create_future()
-                    )
-
-        finally:
-            self._govee_current_request = None
-
-    def _govee_send_item(self, data):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        _LOGGER.debug("sending %s to %s %s", data, self.device_id, self.addr)
-        loop = asyncio.get_event_loop()
-        s.sendto(data, (self.addr, COMMAND_PORT))
-
-    def set_status(self, status: GoveeDevStatus):
-        if self.status != status:
-            _LOGGER.debug(
-                "device status updated: %s from %r --> status %r",
-                self.device_id,
-                self.status,
-                status,
-            )
-            self.status = status
-
-            self._attr_color_temp_kelvin = status.color_temp_kelvin
-            if status.color_temp_kelvin and status.color_temp_kelvin > 0:
+        if state:
+            self._attr_color_temp_kelvin = state.color_temperature
+            if state.color_temperature and state.color_temperature > 0:
                 self._attr_color_temp = color.color_temperature_kelvin_to_mired(
-                    status.color_temp_kelvin
+                    state.color_temperature
                 )
                 self._attr_color_mode = ColorMode.COLOR_TEMP
                 self._attr_rgb_color = None
-            else:
+            elif state.color is not None:
                 self._attr_color_temp_kelvin = None
                 self._attr_color_temp = None
                 self._attr_color_mode = ColorMode.RGB
-                self._attr_rgb_color = (
-                    status.color["r"],
-                    status.color["g"],
-                    status.color["b"],
-                )
+                self._attr_rgb_color = state.color.as_tuple()
 
             self._attr_brightness = max(
-                min(int(255 * status.brightness_pct / 100), 255), 0
+                min(int(255 * state.brightness_pct / 100), 255), 0
             )
-            self._attr_is_on = status.turned_on
+            self._attr_is_on = state.turned_on
 
         if self.entity_id:
             self.schedule_update_ha_state()
 
-        if self._govee_current_request:
-            self._govee_current_request.set_result(None)
-
-    def _current_dev_state(self) -> GoveeDevStatus:
-        rgb = self._attr_rgb_color or [255, 255, 255]
-        return GoveeDevStatus(
-            self._attr_is_on or False,
-            (self._attr_brightness or 0) * 100 / 255,
-            {"r": rgb[0], "g": rgb[1], "b": rgb[2]},
-            self._attr_color_temp_kelvin or 0,
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        _LOGGER.debug(
+            "turn on %s %s with %s",
+            self._govee_device.device_id,
+            self.entity_id,
+            kwargs,
         )
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        _LOGGER.debug("turn on %s with %s", self.device_id, kwargs)
-        turn_on = True
+        try:
+            turn_on = True
 
-        orig_status = self.status
-        status = self._current_dev_state()
-        status.turned_on = True
+            if ATTR_RGB_COLOR in kwargs:
+                r, g, b = kwargs.pop(ATTR_RGB_COLOR)
+                await self._govee_controller.set_color(
+                    self._govee_device, GoveeColor(red=r, green=g, blue=b)
+                )
+                turn_on = False
 
-        if ATTR_RGB_COLOR in kwargs:
-            r, g, b = kwargs.pop(ATTR_RGB_COLOR)
-            rgb = {"r": r, "g": g, "b": b}
-            status.color = rgb
-            await self.async_send_govee_request(
-                "colorwc", {"color": rgb, "colorTemInKelvin": 0}, assumed_status=status
-            )
-            turn_on = False
+            if ATTR_BRIGHTNESS_PCT in kwargs:
+                brightness = max(min(kwargs.pop(ATTR_BRIGHTNESS_PCT), 100), 0)
+                await self._govee_controller.set_brightness(
+                    self._govee_device, brightness
+                )
+                turn_on = False
+            elif ATTR_BRIGHTNESS in kwargs:
+                brightness = int(kwargs.pop(ATTR_BRIGHTNESS) * 100 / 255)
+                await self._govee_controller.set_brightness(
+                    self._govee_device, brightness
+                )
+                turn_on = False
 
-        if ATTR_BRIGHTNESS_PCT in kwargs:
-            brightness = max(min(kwargs.pop(ATTR_BRIGHTNESS_PCT), 100), 0)
-            status.brightness_pct = brightness
-            await self.async_send_govee_request(
-                "brightness", {"value": brightness}, assumed_status=status
-            )
-            turn_on = False
-        elif ATTR_BRIGHTNESS in kwargs:
-            brightness = int(kwargs.pop(ATTR_BRIGHTNESS) * 100 / 255)
-            status.brightness_pct = brightness
-            await self.async_send_govee_request(
-                "brightness", {"value": brightness}, assumed_status=status
-            )
-            turn_on = False
+            if ATTR_COLOR_TEMP_KELVIN in kwargs:
+                color_temp_kelvin = kwargs.pop(ATTR_COLOR_TEMP_KELVIN)
+                color_temp_kelvin = max(
+                    min(color_temp_kelvin, self._attr_max_color_temp_kelvin),
+                    self._attr_min_color_temp_kelvin,
+                )
+                await self._govee_controller.set_color_temperature(
+                    self._govee_device, color_temp_kelvin
+                )
+                turn_on = False
+            elif ATTR_COLOR_TEMP in kwargs:
+                color_temp = kwargs.pop(ATTR_COLOR_TEMP)
+                color_temp_kelvin = color.color_temperature_mired_to_kelvin(color_temp)
+                color_temp_kelvin = max(
+                    min(color_temp_kelvin, self._attr_max_color_temp_kelvin),
+                    self._attr_min_color_temp_kelvin,
+                )
+                await self._govee_controller.set_color_temperature(
+                    self._govee_device, color_temp_kelvin
+                )
+                turn_on = False
 
-        if ATTR_COLOR_TEMP_KELVIN in kwargs:
-            color_temp_kelvin = kwargs.pop(ATTR_COLOR_TEMP_KELVIN)
-            color_temp_kelvin = max(
-                min(color_temp_kelvin, self._attr_max_color_temp_kelvin),
-                self._attr_min_color_temp_kelvin,
-            )
-            status.color_temp_kelvin = color_temp_kelvin
-            await self.async_send_govee_request(
-                "colorwc",
-                {"colorTemInKelvin": color_temp_kelvin},
-                assumed_status=status,
-            )
-            turn_on = False
-        elif ATTR_COLOR_TEMP in kwargs:
-            color_temp = kwargs.pop(ATTR_COLOR_TEMP)
-            color_temp_kelvin = color.color_temperature_mired_to_kelvin(color_temp)
-            color_temp_kelvin = max(
-                min(color_temp_kelvin, self._attr_max_color_temp_kelvin),
-                self._attr_min_color_temp_kelvin,
-            )
-            status.color_temp_kelvin = color_temp_kelvin
-            await self.async_send_govee_request(
-                "colorwc",
-                {"colorTemInKelvin": color_temp_kelvin},
-                assumed_status=status,
-            )
-            turn_on = False
+            if turn_on:
+                await self._govee_controller.set_power_state(self._govee_device, True)
 
-        if turn_on:
-            await self.async_send_govee_request(
-                "turn", {"value": 1}, assumed_status=status
+            await self.async_update_ha_state()
+
+        except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+            _LOGGER.debug(
+                "timeout while modifying device state for %s %s",
+                self._govee_device.device_id,
+                self.entity_id,
+                exc_info=exc,
             )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        _LOGGER.debug("turn OFF %s with %s", self.device_id, kwargs)
-        status = self._current_dev_state()
-        status.turned_on = False
-        await self.async_send_govee_request("turn", {"value": 0}, assumed_status=status)
+        _LOGGER.debug(
+            "turn OFF %s %s with %s",
+            self._govee_device.device_id,
+            self.entity_id,
+            kwargs,
+        )
+        try:
+            await self._govee_controller.set_power_state(self._govee_device, False)
+
+            await self.async_update_ha_state()
+        except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+            _LOGGER.debug(
+                "timeout while modifying device state for %s %s",
+                self._govee_device.device_id,
+                self.entity_id,
+                exc_info=exc,
+            )
 
     async def async_update(self):
-        _LOGGER.info("async_update was called for %s", self.device_id)
-        await self.async_send_govee_request("devStatus", {})
-
-
-class GoveeDiscoProtocol:
-    def __init__(
-        self,
-        hass: core.HomeAssistant,
-        add_entities: AddEntitiesCallback,
-        registry: DeviceRegistry,
-    ):
-        self.add_entities = add_entities
-        self.hass = hass
-        self.registry = registry
-
-    def connection_lost(self, exc):
-        pass
-
-    def connection_made(self, transport):
-        self.transport = transport
-
-    def datagram_received(self, data, addr):
-        message = data.decode()
-        msg = json.loads(message)["msg"]
-        _LOGGER.debug("decoded: %r from %s", msg, addr)
-        source_ip = addr[0]
-        data = msg["data"]
-        if msg["cmd"] == "scan":
-            device = GoveeDevice(self.hass, data["device"], data["sku"], data["ip"])
-            existing = self.registry.devices.get(device.device_id, None)
-            if existing:
-                changed = existing.addr != device.addr
-                if changed:
-                    existing.addr = device.addr
-                    _LOGGER.debug("Updated device %r", device)
-                    existing.schedule_update_ha_state(force_refresh=True)
-            else:
-                _LOGGER.debug("LAN Found device %r", device)
-                self.registry.devices[device.device_id] = device
-                self.add_entities([device], update_before_add=True)
-
-            return
-
-        if msg["cmd"] == "devStatus":
-            status = GoveeDevStatus(
-                True if data["onOff"] == 1 else False,
-                data["brightness"],
-                data["color"],
-                data["colorTemInKelvin"],
-            )
-            for device in self.registry.devices.values():
-                if device.addr == source_ip:
-                    device.set_status(status)
-                    return
-
-            _LOGGER.warning(
-                "datagram_received: didn't find device for %r from %s %r",
-                msg,
-                addr,
-                status,
-            )
-            return
-
-        _LOGGER.warning("unknown msg: %r from %s", msg, addr)
-
-
-async def spawn_disco_listener(
-    interface: str,
-    hass: core.HomeAssistant,
-    add_entities: AddEntitiesCallback,
-    entry: ConfigEntry,
-    registry: DeviceRegistry,
-):
-    loop = asyncio.get_event_loop()
-
-    transport, protocol = await loop.create_datagram_endpoint(
-        lambda: GoveeDiscoProtocol(hass, add_entities, registry),
-        local_addr=(interface, LISTEN_PORT),
-    )
-
-    def unload():
-        _LOGGER.warning("unloading; stop listener for %s", interface)
-        transport.close()
-
-    entry.async_on_unload(unload)
-
-
-async def discover_devices_on_interface(
-    interface: str,
-    hass: core.HomeAssistant,
-    add_entities: AddEntitiesCallback,
-    entry: ConfigEntry,
-    registry: DeviceRegistry,
-):
-    cancelled = False
-
-    hass.async_create_task(
-        spawn_disco_listener(interface, hass, add_entities, entry, registry)
-    )
-
-    def unload():
-        _LOGGER.warning("unloading; cancel disco for %s", interface)
-        cancelled = True
-
-    entry.async_on_unload(unload)
-
-    mcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    mcast.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    mcast.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_IF, socket.inet_aton(interface))
-    mcast.setsockopt(
-        socket.SOL_IP,
-        socket.IP_ADD_MEMBERSHIP,
-        socket.inet_aton(BROADCAST_ADDR) + socket.inet_aton(interface),
-    )
-    mcast.bind((interface, 0))
-
-    interval = 10
-    while not cancelled:
-        _LOGGER.debug("Performing disco on %s", interface)
-        mcast.sendto(
-            b'{"msg":{"cmd":"scan","data":{"account_topic":"reserve"}}}',
-            (BROADCAST_ADDR, BROADCAST_PORT),
+        interval = (
+            HTTP_POLL_INTERVAL
+            if not self._govee_device.lan_definition
+            else LAN_POLL_INTERVAL
         )
-        await asyncio.sleep(interval)
-        interval = min(interval * 1.5, 60)
 
-        if cancelled:
-            _LOGGER.error("disco for %s cancelled", interface)
+        # Can only poll via http; use our own poll interval for this,
+        # as HA may poll too frequently and trip the miserly rate limit
+        # set by Govee
+        now = time.monotonic()
+        if self._last_poll is not None:
+            elapsed = math.ceil(now - self._last_poll)
+            if elapsed < interval:
+                _LOGGER.debug(
+                    "skip async_update for %s %s as elapsed %s < %s",
+                    self._govee_device,
+                    self.entity_id,
+                    elapsed,
+                    interval,
+                )
+                return
 
+        _LOGGER.debug(
+            "async_update will poll %s %s", self._govee_device.device_id, self.entity_id
+        )
+        self._last_poll = now
 
-# https://govee-public.s3.amazonaws.com/developer-docs/GoveeDeveloperAPIReference.pdf
-class GoveeApiClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-
-    async def control(self, params):
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        conn = aiohttp.TCPConnector(ssl=ssl_context)
-        async with aiohttp.ClientSession(connector=conn) as session:
-            async with session.put(
-                url="https://developer-api.govee.com/v1/devices/control",
-                headers={"Govee-API-Key": self.api_key},
-                json=params,
-            ) as response:
-                if response.status == 200:
-                    resp = await response.json()
-                    return resp
-                else:
-                    message = await response.text()
-                    _LOGGER.error(
-                        "failed to control: %s %r (api_key=%s)",
-                        message,
-                        params,
-                        self.api_key,
-                    )
-                return None
-
-    async def get_state(self, device_id, model):
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        conn = aiohttp.TCPConnector(ssl=ssl_context)
-        async with aiohttp.ClientSession(connector=conn) as session:
-            async with session.get(
-                url="https://developer-api.govee.com/v1/devices/state",
-                headers={"Govee-API-Key": self.api_key},
-                params={"model": model, "device": device_id},
-            ) as response:
-                if response.status == 200:
-                    resp = await response.json()
-                    _LOGGER.debug("resp: %r", resp)
-                    if "data" in resp and "properties" in resp["data"]:
-                        return resp["data"]["properties"]
-                else:
-                    message = await response.text()
-                    _LOGGER.error(
-                        "failed to get state: %s (api_key=%s)", message, self.api_key
-                    )
-                return None
-
-    async def get_devices(self):
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        conn = aiohttp.TCPConnector(ssl=ssl_context)
-        async with aiohttp.ClientSession(connector=conn) as session:
-            async with session.get(
-                url="https://developer-api.govee.com/v1/devices",
-                headers={"Govee-API-Key": self.api_key},
-            ) as response:
-                if response.status == 200:
-                    devices = await response.json()
-                    _LOGGER.debug("devices: %r", devices)
-                    if "data" in devices and "devices" in devices["data"]:
-                        return devices["data"]["devices"]
-                else:
-                    message = await response.text()
-                    _LOGGER.error(
-                        "failed to get devices: %s (api_key=%s)", message, self.api_key
-                    )
-                return None
+        try:
+            # A little random jitter to avoid getting a storm of UDP
+            # responses from the LAN interface all at once
+            # await asyncio.sleep(random.uniform(0.0, 3.2))
+            await self._govee_controller.update_device_state(self._govee_device)
+        except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+            _LOGGER.debug(
+                "timeout while querying device state for %s %s",
+                self._govee_device.device_id,
+                self.entity_id,
+                exc_info=exc,
+            )
