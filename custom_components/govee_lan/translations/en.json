@@ -23,7 +23,7 @@
         "data": {
           "api_key": "API Key"
         },
-        "title": "Options",
+        "title": "",
         "description": "Configure the Govee integration."
       }
     }
