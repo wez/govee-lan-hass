@@ -1,5 +1,7 @@
 # Govee LAN Control for Home Assistant
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
+
 This works in conjunction with my
 [govee-led-wez](https://github.com/wez/govee-py) python library to provide
 control over Govee-manufactured lights, preferentially using the LAN protocol
