@@ -1,14 +1,15 @@
 {
   "codeowners": ["@wez"],
   "config_flow": true,
-  "dependencies": ["bluetooth"],
-  "requirements": ["govee-led-wez>=0.0.6"],
+  "requirements": ["govee-led-wez==0.0.6"],
   "documentation": "https://github.com/wez/hass-govee-lan",
+  "issue_tracker": "https://github.com/wez/hacs-govee-lan/issues",
   "domain": "govee_lan",
   "iot_class": "local_polling",
   "name": "Govee LAN Control",
   "integration_type": "hub",
   "integrations": ["govee"],
   "requirements": [],
+  "loggers": ["govee_led_wez"],
   "version": "1.0.0"
 }
