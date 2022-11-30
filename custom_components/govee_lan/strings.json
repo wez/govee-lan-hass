@@ -1,5 +1,5 @@
 {
-  "title": "Govee LAN Control",
+  "title": "Configure LAN Control",
   "config": {
     "abort": {
     },
@@ -23,7 +23,7 @@
         "data": {
           "api_key": "API Key"
         },
-        "title": "",
+        "title": "Options",
         "description": "Configure the Govee integration."
       }
     }
