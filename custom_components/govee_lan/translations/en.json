@@ -10,7 +10,7 @@
         "data": {
           "api_key": "API Key"
         },
-        "title": "API Key (optional)",
+        "title": "",
         "description": "Get your API Key from the Govee Home App."
       }
     }
