@@ -34,3 +34,50 @@ set up from the app is nice, so I recommend getting that set up anyway.
 * Then go to Settings -> Devices &amp; Services and click "Add Integration"
 * Type "Govee LAN Control" and add the integration
 * Enter your HTTP API key where prompted
+
+## Notes
+
+* The `govee-led-wez` library doesn't perform immediate *read-after-write* of
+  the device state after controlling a device. When using the HTTP API, doing
+  so would double the number of calls made to the web service and increase the
+  chances of hitting a rate limit. For the LAN API, while the devices generally
+  respond immediate to a control request, they don't reliably return the
+  updated device state for several seconds.  As such, this integration
+  assumes that successful control requests result in the state reflecting
+  the request.  If you are using other software to also control the lights,
+  then you may experience incorrect information being reported in Home Assistant
+  until the devices are polled.
+* LAN devices have their individual state polled once per minute
+* HTTP devices have their individual state polled once every 10 minutes
+* New LAN devices are discovered every 10 seconds
+* New HTTP devices are discovered every 10 minutes
+* You can force re-discovery/updating of HTTP device and their names by
+  reloading the integration
+
+## Tips on Enabling the LAN API
+
+The [LAN API](https://app-h5.govee.com/user-manual/wlan-guide) docs have a list
+of supported models.  The Govee app sometimes needs coaxing to show the LAN
+Control option for supported devices.  Here's what works for me:
+
+* Open the app and ensure that the device(s) are fully up to date and have WiFi configured
+* Close/kill the Govee app
+* Turn off wifi on your mobile device; this seems to help encourage the app to show the LAN Control option.
+* Open the app and go to the settings for the device
+* The LAN Control option should appear for supported devices
+* Turn it on
+* Once done enabling LAN Control for your Govee devices, re-enable wifi on your mobile device
+
+## Requirements of the LAN API
+
+* UDP port 4003 must be available to the integration, as the LAN API protocol
+  doesn't respond to the sender of a request, but only to that fixed port
+  number.  That means that you cannot run two different implementations of the
+  Govee LAN API from the same IP address (eg: homebridge's govee plugin cannot
+  run on the same IP as this HASS integration).  If you need to do that for
+  some reason, you will need to configure each of them to run on separate IP
+  addresses.
+* Your network needs to support *multicast UDP* over wifi. Your wifi router may
+  require some specific configuration to allow this to work reliably. Note that
+  this is NOT the same thing as *multicast DNS*, although there is some relation
+  between them.
