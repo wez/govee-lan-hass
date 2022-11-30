@@ -1,5 +1,5 @@
 {
-  "title": "Configure LAN Control",
+  "title": "Govee Lights",
   "config": {
     "abort": {
     },
@@ -24,7 +24,7 @@
           "api_key": "API Key"
         },
         "title": "Options",
-        "description": "Configure the Govee integration."
+        "description": "Optionally enter your API Key. You can request it via the Govee mobile application by going to Account | Settings | Request API Key"
       }
     }
   }
