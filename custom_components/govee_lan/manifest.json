@@ -9,7 +9,6 @@
   "name": "Govee LAN Control",
   "integration_type": "hub",
   "integrations": ["govee"],
-  "requirements": [],
   "loggers": ["govee_led_wez"],
   "version": "1.0.0"
 }
