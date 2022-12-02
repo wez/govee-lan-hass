@@ -36,7 +36,8 @@ from homeassistant.util import color
 from homeassistant.util.timeout import TimeoutManager
 from .const import DOMAIN
 import voluptuous as vol
-
+from bleak import BleakClient, BleakError
+from homeassistant.components import bluetooth
 from govee_led_wez import (
     GoveeController,
     GoveeDevice,
@@ -164,6 +165,33 @@ async def async_setup_entry(
 
     interfaces = await async_get_interfaces(hass)
     controller.start_lan_poller(interfaces)
+
+    @callback
+    def _async_discovered_ble(
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+        change: bluetooth.BluetoothChange,
+    ) -> None:
+        """Subscribe to bluetooth changes."""
+
+        _LOGGER.info(
+            "New service_info: %s name=%s address=%s source=%s rssi=%s",
+            change,
+            service_info.name,
+            service_info.address,
+            service_info.source,
+            service_info.rssi,
+        )
+        controller.register_ble_device(service_info.device)
+
+    for mfr in [34817, 34818]:
+        entry.async_on_unload(
+            bluetooth.async_register_callback(
+                hass,
+                _async_discovered_ble,
+                {"manufacturer_id": mfr},
+                bluetooth.BluetoothScanningMode.ACTIVE,
+            )
+        )
 
 
 class GoveLightEntity(LightEntity):
