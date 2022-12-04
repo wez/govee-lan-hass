@@ -242,6 +242,9 @@ class GoveLightEntity(LightEntity):
             sw_version=self._govee_device.lan_definition.wifi_software_version
             if self._govee_device.lan_definition
             else None,
+            hw_version=self._govee_device.lan_definition.wifi_hardware_version
+            if self._govee_device.lan_definition
+            else None,
         )
 
     @property
