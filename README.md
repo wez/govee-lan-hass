@@ -2,6 +2,8 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=wez&repository=govee-lan-hass&category=integration)
+
 This works in conjunction with my
 [govee-led-wez](https://github.com/wez/govee-py) python library to provide
 control over Govee-manufactured lights, preferentially using the LAN protocol
@@ -27,10 +29,8 @@ set up from the app is nice, so I recommend getting that set up anyway.
 * Install [HACS - the Home Assistant Community Store](https://hacs.xyz/docs/setup/download/)
 * Add this repo to HACS by:
   1. Open the HACS integrations page
-  2. In the top right corner click the three vertical dots and select "Custom repositories"
-  3. Paste in the URL to this repo in the "Repository" box
-  4. Set category to "Integration"
-  5. Click Add
+  2. In the bottom right corner click the "Explore &amp; Download Repositories" button
+  3. Type in "Govee LAN Control" and select it and add it
 
 * Once added, restart Home Assistant
 * Then go to Settings -> Devices &amp; Services and click "Add Integration"
