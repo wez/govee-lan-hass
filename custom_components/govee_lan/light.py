@@ -60,7 +60,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({vol.Optional(CONF_API_KEY): cv.string}
 
 # TODO: move to option flow
 HTTP_POLL_INTERVAL = 600
-LAN_POLL_INTERVAL = 60
+LAN_POLL_INTERVAL = 10
 
 SKU_NAMES = {
     "H610A": "Glide Lively",
@@ -206,6 +206,7 @@ class GoveLightEntity(LightEntity):
     }
 
     def __init__(self, controller: GoveeController, device: GoveeDevice):
+        self._attr_extra_state_attributes = {}
         self._govee_controller = controller
         self._govee_device = device
         self._last_poll = None
@@ -281,6 +282,10 @@ class GoveLightEntity(LightEntity):
                 min(int(255 * state.brightness_pct / 100), 255), 0
             )
             self._attr_is_on = state.turned_on
+
+        self._attr_extra_state_attributes["http_enabled"] = device.http_definition is not None
+        self._attr_extra_state_attributes["ble_enabled"] = device.ble_device is not None
+        self._attr_extra_state_attributes["lan_enabled"] = device.lan_definition is not None
 
         if self.entity_id:
             self.schedule_update_ha_state()
@@ -398,11 +403,16 @@ class GoveLightEntity(LightEntity):
         )
         self._last_poll = now
 
+        current_time_string = time.strftime("%c")
+
         try:
             # A little random jitter to avoid getting a storm of UDP
             # responses from the LAN interface all at once
             # await asyncio.sleep(random.uniform(0.0, 3.2))
             await self._govee_controller.update_device_state(self._govee_device)
+            self._attr_available = True
+            self._attr_extra_state_attributes["update_status"] = f"ok at {current_time_string}"
+            self._attr_extra_state_attributes["timeout_count"] = 0
         except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
             _LOGGER.debug(
                 "timeout while querying device state for %s %s",
@@ -410,3 +420,8 @@ class GoveLightEntity(LightEntity):
                 self.entity_id,
                 exc_info=exc,
             )
+            timeout_count = self._attr_extra_state_attributes.get("timeout_count", 0) + 1
+            self._attr_extra_state_attributes["update_status"] = f"timed out at {current_time_string}"
+            self._attr_extra_state_attributes["timeout_count"] = timeout_count
+            if timeout_count > 1:
+                self._attr_available = False
