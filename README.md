@@ -72,6 +72,9 @@ Control option for supported devices.  Here's what works for me:
 
 ## Requirements of the LAN API
 
+* Home Assistant must be running on the same network as your Govee devices.
+  If you are running it in docker, you will need to use `network_mode: host`
+  or use a macvlan network.
 * UDP port 4003 must be available to the integration, as the LAN API protocol
   doesn't respond to the sender of a request, but only to that fixed port
   number.  That means that you cannot run two different implementations of the
