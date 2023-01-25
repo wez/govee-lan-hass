@@ -86,3 +86,21 @@ Control option for supported devices.  Here's what works for me:
   require some specific configuration to allow this to work reliably. Note that
   this is NOT the same thing as *multicast DNS*, although there is some relation
   between them.
+
+## Troubleshooting
+
+If you add this to your `configuration.yaml` and restart home assistant, you'll get verbose logging that might reveal more about what's happening:
+
+```yaml
+logger:
+  logs:
+    custom_components.govee_lan: debug
+    govee_led_wez: debug
+```
+
+In addition, some diagnostics are recorded as extended attribute data associated
+with each entity. In HASS, go to "Developer Tools" -> "State", then type in the name
+of the light you were trying to control; it should show something like this screenshot:
+
+![image](https://user-images.githubusercontent.com/117777/212545829-e0d2dc54-20f3-44bf-ac25-6bc679c76583.png)
+
