@@ -346,6 +346,10 @@ class GoveLightEntity(LightEntity):
             if turn_on:
                 await self._govee_controller.set_power_state(self._govee_device, True)
 
+            # Update the last poll time to now to prevent the next poll from resetting the state
+            # from the assumed state to an old state (because Govee returns the wrong state after a
+            # write for some time)
+            self._last_poll = time.monotonic()
             await self.async_update_ha_state()
 
         except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
@@ -366,6 +370,10 @@ class GoveLightEntity(LightEntity):
         try:
             await self._govee_controller.set_power_state(self._govee_device, False)
 
+            # Update the last poll time to now to prevent the next poll from resetting the state
+            # from the assumed state to an old state (because Govee returns the wrong state after a
+            # write for some time)
+            self._last_poll = time.monotonic()
             await self.async_update_ha_state()
         except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
             _LOGGER.debug(
