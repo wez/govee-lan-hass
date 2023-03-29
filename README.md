@@ -58,6 +58,9 @@ set up from the app is nice, so I recommend getting that set up anyway.
 
 ## Tips on Enabling the LAN API
 
+**Note: you need to enable the LAN API for each individual device!
+Repeat these steps for each of your devices!**
+
 The [LAN API](https://app-h5.govee.com/user-manual/wlan-guide) docs have a list
 of supported models.  The Govee app sometimes needs coaxing to show the LAN
 Control option for supported devices.  Here's what works for me:
