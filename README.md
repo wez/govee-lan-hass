@@ -11,6 +11,8 @@ for local control.
 
 ## Installation
 
+**Note: you need to enable the LAN API for each individual device!**
+
 Recommended first step: Obtain an HTTP API key from the Govee API:
 * Open the Account Page of the Govee mobile app (the person icon in the bottom right)
 * Click the settings "cog" icon in the top right
