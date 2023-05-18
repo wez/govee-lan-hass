@@ -9,6 +9,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/wez/govee-lan-hass/issues",
   "loggers": ["govee_led_wez"],
-  "requirements": ["govee-led-wez>=0.0.14"],
+  "requirements": ["govee-led-wez>=0.0.15"],
   "version": "1.0.0"
 }
