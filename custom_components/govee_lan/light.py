@@ -350,7 +350,7 @@ class GoveLightEntity(LightEntity):
             # from the assumed state to an old state (because Govee returns the wrong state after a
             # write for some time)
             self._last_poll = time.monotonic()
-            await self.async_write_ha_state()
+            self.async_write_ha_state()
 
         except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
             _LOGGER.debug(
@@ -374,7 +374,7 @@ class GoveLightEntity(LightEntity):
             # from the assumed state to an old state (because Govee returns the wrong state after a
             # write for some time)
             self._last_poll = time.monotonic()
-            await self.async_write_ha_state()
+            self.async_write_ha_state()
         except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
             _LOGGER.debug(
                 "timeout while modifying device state for %s %s",
