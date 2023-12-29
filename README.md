@@ -80,9 +80,14 @@ Control option for supported devices.  Here's what works for me:
 * Home Assistant must be running on the same network as your Govee devices.
   If you are running it in docker, you will need to use `network_mode: host`
   or use a macvlan network.
-* UDP port 4003 must be available to the integration, as the LAN API protocol
-  doesn't respond to the sender of a request, but only to that fixed port
-  number.  That means that you cannot run two different implementations of the
+* UDP port 4001 much be reachable from the integration. The LAN discovery
+  protocol sends a multicast packet to 239.255.255.250 port 4001.
+* UDP port 4002 must be available for the integration to receive UDP packets
+  from the discovery protocol ping. 
+* UDP port 4003 must be reachable from the integration. Govee devices will
+  listen for commands on this port.
+* These fix port requirements are unfortunately part of the LAN API protocol.
+  That means that you cannot run two different implementations of the
   Govee LAN API from the same IP address (eg: homebridge's govee plugin cannot
   run on the same IP as this HASS integration).  If you need to do that for
   some reason, you will need to configure each of them to run on separate IP
