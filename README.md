@@ -4,6 +4,16 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=wez&repository=govee-lan-hass&category=integration)
 
+## ⚠️ Consider using the [Govee2MQTT AddOn](https://github.com/wez/govee2mqtt) Instead ⚠️
+
+> Before you get too invested in setting up `govee-lan-hass`, I wanted to note
+that I've shifted my development focus to my [Govee2MQTT AddOn](https://github.com/wez/govee2mqtt).
+That has support for new APIs and devices, and is more flexible than the `govee-lan-hass` integration.
+> 
+> Note that due to how Govee's LAN API works, you cannot run both the addon and the integration at the same time.
+
+## Govee LAN Control for Home Assistant
+
 This works in conjunction with my
 [govee-led-wez](https://github.com/wez/govee-py) python library to provide
 control over Govee-manufactured lights, preferentially using the LAN protocol
