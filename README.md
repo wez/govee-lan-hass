@@ -2,7 +2,32 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=wez&repository=govee-lan-hass&category=integration)
+## ⚠️ This Fork: Home Assistant 2024.1+ Compatibility ⚠️
+
+> **This is a maintained fork** of [wez/govee-lan-hass](https://github.com/wez/govee-lan-hass) with fixes for Home Assistant 2024.1+ and 2025.x.
+>
+> The upstream repository appears unmaintained and breaks on modern Home Assistant versions. This fork includes:
+> - **HA 2024.1+ fixes**: `async_forward_entry_setups`, `OptionsFlow` config_entry property
+> - **HA 2025.3+ deprecation fixes**: Color modes, removed constants
+> - **New: Scene/Effect support** via the light entity's Effect dropdown (requires API key)
+> - **Thread safety fixes** for device callbacks
+>
+> **A PR has been submitted upstream**: [wez/govee-lan-hass#81](https://github.com/wez/govee-lan-hass/pull/81)
+
+### Installation from this Fork
+
+**Via HACS (recommended):**
+1. Open HACS → Integrations → Three dots menu → "Custom repositories"
+2. Add `https://github.com/nateober/govee-lan-hass` as an Integration
+3. Search for "Govee LAN Control" and install
+4. Restart Home Assistant
+
+**Manual installation:**
+1. Download the `custom_components/govee_lan` folder from this repo
+2. Copy it to your Home Assistant `config/custom_components/` directory
+3. Restart Home Assistant
+
+---
 
 ## ⚠️ Consider using the [Govee2MQTT AddOn](https://github.com/wez/govee2mqtt) Instead ⚠️
 

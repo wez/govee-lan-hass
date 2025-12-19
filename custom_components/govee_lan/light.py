@@ -11,20 +11,25 @@ from typing import Any, Dict
 
 from homeassistant import core
 from homeassistant.components import network
+import aiohttp
+
 from homeassistant.components.light import (
-    ColorMode,
     ATTR_BRIGHTNESS,
     ATTR_BRIGHTNESS_PCT,
-    ATTR_COLOR_TEMP,
     ATTR_COLOR_TEMP_KELVIN,
+    ATTR_EFFECT,
     ATTR_HS_COLOR,
     ATTR_RGB_COLOR,
-    SUPPORT_BRIGHTNESS,
-    SUPPORT_COLOR,
-    SUPPORT_COLOR_TEMP,
+    ColorMode,
     LightEntity,
+    LightEntityFeature,
     PLATFORM_SCHEMA,
 )
+
+# ATTR_COLOR_TEMP (mireds) is deprecated in HA 2024.x, but we keep backward
+# compatibility for callers that haven't migrated to ATTR_COLOR_TEMP_KELVIN yet.
+# This constant will be removed in HA 2026.1.
+ATTR_COLOR_TEMP = "color_temp"
 import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, Platform
@@ -69,11 +74,99 @@ SKU_NAMES = {
     "H619A": "LED Strip",
 }
 
+# Govee API endpoints for scene/effect control
+GOVEE_API_BASE = "https://openapi.api.govee.com/router/api/v1"
+SCENES_ENDPOINT = f"{GOVEE_API_BASE}/device/scenes"
+CONTROL_ENDPOINT = f"{GOVEE_API_BASE}/device/control"
+
+
+async def fetch_device_scenes(api_key: str, sku: str, device_id: str) -> Dict[str, Dict]:
+    """Fetch available scenes/effects for a device from Govee API."""
+    if not api_key:
+        return {}
+
+    headers = {
+        "Govee-API-Key": api_key,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "requestId": f"scenes_{device_id}",
+        "payload": {
+            "sku": sku,
+            "device": device_id,
+        }
+    }
+
+    scenes = {}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(SCENES_ENDPOINT, headers=headers, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    capabilities = data.get("payload", {}).get("capabilities", [])
+
+                    for cap in capabilities:
+                        if cap.get("type") == "devices.capabilities.dynamic_scene":
+                            instance = cap.get("instance", "")
+                            options = cap.get("parameters", {}).get("options", [])
+
+                            for opt in options:
+                                name = opt.get("name", "")
+                                value = opt.get("value", {})
+                                if name and value:
+                                    scenes[name] = {
+                                        "instance": instance,
+                                        "value": value,
+                                    }
+                else:
+                    _LOGGER.warning("Failed to fetch scenes for %s: %s", device_id, resp.status)
+    except Exception as exc:
+        _LOGGER.debug("Error fetching scenes for %s: %s", device_id, exc)
+
+    return scenes
+
+
+async def set_device_scene(api_key: str, sku: str, device_id: str, instance: str, value: Dict) -> bool:
+    """Set a scene/effect on a device via Govee API."""
+    headers = {
+        "Govee-API-Key": api_key,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "requestId": f"control_{device_id}",
+        "payload": {
+            "sku": sku,
+            "device": device_id,
+            "capability": {
+                "type": "devices.capabilities.dynamic_scene",
+                "instance": instance,
+                "value": value,
+            }
+        }
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(CONTROL_ENDPOINT, headers=headers, json=payload) as resp:
+                if resp.status == 200:
+                    _LOGGER.debug("Scene set successfully for %s", device_id)
+                    return True
+                else:
+                    text = await resp.text()
+                    _LOGGER.warning("Failed to set scene for %s: %s - %s", device_id, resp.status, text)
+                    return False
+    except Exception as exc:
+        _LOGGER.error("Error setting scene for %s: %s", device_id, exc)
+        return False
+
 
 class DeviceRegistry:
-    def __init__(self, add_entities: AddEntitiesCallback):
+    def __init__(self, hass: core.HomeAssistant, add_entities: AddEntitiesCallback, api_key: str | None):
+        self.hass = hass
         self.devices: Dict[str, GoveLightEntity] = {}
         self.add_entities = add_entities
+        self.api_key = api_key
 
     def handle_device_update(
         self,
@@ -95,11 +188,15 @@ class DeviceRegistry:
             entity._govee_device = device
             entity._govee_device_updated()
         else:
-            entity = GoveLightEntity(controller, device)
+            entity = GoveLightEntity(controller, device, self.api_key)
             self.devices[device.device_id] = entity
             entity._govee_device_updated()
             _LOGGER.info("Adding %s %s", device.device_id, entity._attr_name)
             self.add_entities([entity])
+
+            # Fetch scenes/effects for the device in the background
+            if self.api_key:
+                self.hass.async_create_task(entity.async_fetch_scenes())
 
 
 async def async_get_interfaces(hass: core.HomeAssistant):
@@ -125,16 +222,22 @@ async def async_setup_entry(
 ):
     _LOGGER.info("async_setup_entry was called")
 
-    registry = DeviceRegistry(add_entities)
+    api_key = entry.options.get(CONF_API_KEY, entry.data.get(CONF_API_KEY, None))
+
+    registry = DeviceRegistry(hass, add_entities, api_key)
     controller = GoveeController()
     controller.set_device_control_timeout(3)  # TODO: configurable
-    controller.set_device_change_callback(
-        lambda device: registry.handle_device_update(hass, entry, controller, device)
-    )
+
+    # The callback may be called from a background thread, so we need to
+    # schedule the update on the main event loop to be thread-safe
+    def _threadsafe_device_callback(device):
+        hass.loop.call_soon_threadsafe(
+            lambda: registry.handle_device_update(hass, entry, controller, device)
+        )
+
+    controller.set_device_change_callback(_threadsafe_device_callback)
     hass.data[DOMAIN]["controller"] = controller
     hass.data[DOMAIN]["registry"] = registry
-
-    api_key = entry.options.get(CONF_API_KEY, entry.data.get(CONF_API_KEY, None))
 
     entry.async_on_unload(controller.stop)
 
@@ -147,6 +250,10 @@ async def async_setup_entry(
     if api_key:
         controller.set_http_api_key(api_key)
         try:
+            # Note: This may trigger a "blocking call" warning for SSL cert loading.
+            # The blocking is minimal (cert loading is cached after first call) and
+            # the alternative (running in executor) causes thread-safety issues with
+            # the device callback system.
             await controller.query_http_devices()
         except RuntimeError as exc:
             # The consequence of this is that the user-friendly names
@@ -200,16 +307,22 @@ class GoveLightEntity(LightEntity):
     _attr_min_color_temp_kelvin = 2000
     _attr_max_color_temp_kelvin = 9000
     _attr_supported_color_modes = {
-        ColorMode.BRIGHTNESS,
         ColorMode.COLOR_TEMP,
         ColorMode.RGB,
     }
 
-    def __init__(self, controller: GoveeController, device: GoveeDevice):
+    def __init__(self, controller: GoveeController, device: GoveeDevice, api_key: str | None = None):
         self._attr_extra_state_attributes = {}
         self._govee_controller = controller
         self._govee_device = device
         self._last_poll = None
+        # Set default color mode to avoid "does not report a color mode" warning
+        self._attr_color_mode = ColorMode.RGB
+
+        # Scene/effect support
+        self._api_key = api_key
+        self._scenes: Dict[str, Dict] = {}
+        self._attr_effect = None
 
         ident = device.device_id.replace(":", "")
         self._attr_unique_id = f"{device.model}_{ident}"
@@ -253,6 +366,45 @@ class GoveLightEntity(LightEntity):
         """Return if the entity should be enabled when first added to the entity registry."""
         return True
 
+    @property
+    def supported_features(self) -> LightEntityFeature:
+        """Return supported features."""
+        if self._scenes:
+            return LightEntityFeature.EFFECT
+        return LightEntityFeature(0)
+
+    @property
+    def effect_list(self) -> list[str] | None:
+        """Return the list of available effects."""
+        if self._scenes:
+            return list(self._scenes.keys())
+        return None
+
+    @property
+    def effect(self) -> str | None:
+        """Return the current effect."""
+        return self._attr_effect
+
+    async def async_fetch_scenes(self) -> None:
+        """Fetch available scenes/effects from Govee API."""
+        if not self._api_key:
+            return
+
+        device = self._govee_device
+        scenes = await fetch_device_scenes(self._api_key, device.model, device.device_id)
+
+        if scenes:
+            self._scenes = scenes
+            _LOGGER.info(
+                "Loaded %d effects for %s (%s)",
+                len(scenes),
+                self._attr_name,
+                device.device_id,
+            )
+            # Update state to reflect new effect support
+            if self.hass:
+                self.async_write_ha_state()
+
     def _govee_device_updated(self):
         device = self._govee_device
         state = device.state
@@ -267,14 +419,10 @@ class GoveLightEntity(LightEntity):
         if state:
             self._attr_color_temp_kelvin = state.color_temperature
             if state.color_temperature and state.color_temperature > 0:
-                self._attr_color_temp = color.color_temperature_kelvin_to_mired(
-                    state.color_temperature
-                )
                 self._attr_color_mode = ColorMode.COLOR_TEMP
                 self._attr_rgb_color = None
             elif state.color is not None:
                 self._attr_color_temp_kelvin = None
-                self._attr_color_temp = None
                 self._attr_color_mode = ColorMode.RGB
                 self._attr_rgb_color = state.color.as_tuple()
 
@@ -342,6 +490,23 @@ class GoveLightEntity(LightEntity):
                     self._govee_device, color_temp_kelvin
                 )
                 turn_on = False
+
+            if ATTR_EFFECT in kwargs:
+                effect = kwargs.pop(ATTR_EFFECT)
+                scene_data = self._scenes.get(effect)
+                if scene_data and self._api_key:
+                    success = await set_device_scene(
+                        self._api_key,
+                        self._govee_device.model,
+                        self._govee_device.device_id,
+                        scene_data["instance"],
+                        scene_data["value"],
+                    )
+                    if success:
+                        self._attr_effect = effect
+                    turn_on = False
+                else:
+                    _LOGGER.warning("Unknown effect or no API key: %s", effect)
 
             if turn_on:
                 await self._govee_controller.set_power_state(self._govee_device, True)

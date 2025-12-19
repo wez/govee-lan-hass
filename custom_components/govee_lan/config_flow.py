@@ -33,17 +33,18 @@ class GoveeFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        return GoveeOptionsFlowHandler(config_entry)
+        return GoveeOptionsFlowHandler()
 
 
 class GoveeOptionsFlowHandler(config_entries.OptionsFlow):
     VERSION = 1
 
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
-        self.options = dict(config_entry.options)
+    def __init__(self):
+        self.options = {}
 
     async def async_step_init(self, user_input=None):
+        # Initialize options from config_entry (now available as self.config_entry)
+        self.options = dict(self.config_entry.options)
         return await self.async_step_user()
 
     async def async_step_user(self, user_input=None):
