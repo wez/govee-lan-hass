@@ -1,12 +1,14 @@
-import homeassistant.helpers.config_validation as cv
-from homeassistant.const import CONF_API_KEY
 import logging
 from typing import Any
-from .const import DOMAIN
-from homeassistant.core import callback
+
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant import config_entries, core, exceptions
+from homeassistant import config_entries
+from homeassistant.const import CONF_API_KEY
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,9 +21,10 @@ class GoveeFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
+            # If you need uniqueness enforcement, add async_set_unique_id() here.
             return self.async_create_entry(title=DOMAIN, data=user_input)
 
         return self.async_show_form(
@@ -32,38 +35,41 @@ class GoveeFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
         return GoveeOptionsFlowHandler(config_entry)
 
 
 class GoveeOptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options flow for Govee LAN."""
+
     VERSION = 1
 
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
-        self.options = dict(config_entry.options)
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        # HA 2026.2: OptionsFlow doesn't accept (config_entry) in __init__
+        # and config_entry property may be read-only, so keep our own reference.
+        self._config_entry = config_entry
+        self._options: dict[str, Any] = dict(config_entry.options)
 
-    async def async_step_init(self, user_input=None):
-        return await self.async_step_user()
+    async def async_step_init(self, user_input=None) -> FlowResult:
+        return await self.async_step_user(user_input)
 
-    async def async_step_user(self, user_input=None):
-        current_api_key = self.config_entry.options.get(
-            CONF_API_KEY, self.config_entry.data.get(CONF_API_KEY, None)
+    async def async_step_user(self, user_input=None) -> FlowResult:
+        current_api_key = self._config_entry.options.get(
+            CONF_API_KEY, self._config_entry.data.get(CONF_API_KEY)
         )
 
-        errors = {}
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            api_key = user_input[CONF_API_KEY]
-            self.options.update(user_input)
-            return await self._update_options()
+            self._options.update(user_input)
+            return self.async_create_entry(title=DOMAIN, data=self._options)
 
         options_schema = vol.Schema(
             {vol.Optional(CONF_API_KEY, default=current_api_key): cv.string}
         )
 
         return self.async_show_form(
-            step_id="user", data_schema=options_schema, errors=errors
+            step_id="user",
+            data_schema=options_schema,
+            errors=errors,
         )
-
-    async def _update_options(self):
-        return self.async_create_entry(title=DOMAIN, data=self.options)

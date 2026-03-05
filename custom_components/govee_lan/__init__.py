@@ -1,40 +1,49 @@
-""" Govee LAN Control """
+"""Govee LAN Control integration."""
 from __future__ import annotations
 
-import voluptuous as vol
 import logging
+from typing import Any
 
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from .const import DOMAIN
-from typing import Dict
+from homeassistant.core import HomeAssistant
 
-from govee_led_wez import GoveeController, GoveeDevice
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-CONFIG_SCHEMA = vol.Schema({vol.Optional(DOMAIN): {}}, extra=vol.ALLOW_EXTRA)
+
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    _LOGGER.info("async_setup called!")
-    hass.data[DOMAIN] = {}
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Set up the integration via YAML (we mainly use config entries)."""
+    hass.data.setdefault(DOMAIN, {})
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Set up Govee from a config entry."""
-    _LOGGER.info("async_setup_entry called!")
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Govee LAN from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
+    _LOGGER.debug("Setting up config entry: %s", entry.entry_id)
 
-    for component in PLATFORMS:
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, component)
-        )
+    # Forward setup to the platforms (light.py, etc.)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    _LOGGER.debug("Unloading config entry: %s", entry.entry_id)
+    ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    # Optional cleanup if you stored per-entry data
+    if ok and DOMAIN in hass.data:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+
+    return ok
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry."""
+    await async_unload_entry(hass, entry)
+    await async_setup_entry(hass, entry)
