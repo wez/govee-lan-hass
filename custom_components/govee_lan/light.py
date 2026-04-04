@@ -15,16 +15,18 @@ from homeassistant.components.light import (
     ColorMode,
     ATTR_BRIGHTNESS,
     ATTR_BRIGHTNESS_PCT,
-    ATTR_COLOR_TEMP,
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_HS_COLOR,
     ATTR_RGB_COLOR,
-    SUPPORT_BRIGHTNESS,
-    SUPPORT_COLOR,
-    SUPPORT_COLOR_TEMP,
     LightEntity,
     PLATFORM_SCHEMA,
 )
+
+# These constants were removed in Home Assistant 2026.x
+ATTR_COLOR_TEMP = "color_temp"
+SUPPORT_BRIGHTNESS = 1
+SUPPORT_COLOR = 16
+SUPPORT_COLOR_TEMP = 2
 import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, Platform
@@ -200,7 +202,6 @@ class GoveLightEntity(LightEntity):
     _attr_min_color_temp_kelvin = 2000
     _attr_max_color_temp_kelvin = 9000
     _attr_supported_color_modes = {
-        ColorMode.BRIGHTNESS,
         ColorMode.COLOR_TEMP,
         ColorMode.RGB,
     }
