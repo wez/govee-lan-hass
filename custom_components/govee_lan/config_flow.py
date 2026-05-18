@@ -40,15 +40,18 @@ class GoveeOptionsFlowHandler(config_entries.OptionsFlow):
     VERSION = 1
 
     def __init__(self, config_entry):
-        self.config_entry = config_entry
+        # OptionsFlow.config_entry became a framework-managed property in HA
+        # 2024.12 (setter removed shortly after). Don't reassign it — store
+        # the entry under a private name and use that everywhere instead.
+        self._entry = config_entry
         self.options = dict(config_entry.options)
 
     async def async_step_init(self, user_input=None):
         return await self.async_step_user()
 
     async def async_step_user(self, user_input=None):
-        current_api_key = self.config_entry.options.get(
-            CONF_API_KEY, self.config_entry.data.get(CONF_API_KEY, None)
+        current_api_key = self._entry.options.get(
+            CONF_API_KEY, self._entry.data.get(CONF_API_KEY, None)
         )
 
         errors = {}
